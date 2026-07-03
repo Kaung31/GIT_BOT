@@ -16,10 +16,15 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://slackagent:slackagent@localhost:5432/slackagent"
     redis_url: str = "redis://localhost:6379/0"
 
-    jira_mcp_url: str = ""
-    notion_mcp_url: str = ""
+    jira_base_url: str = ""       # https://yoursite.atlassian.net
+    jira_email: str = ""
+    jira_api_token: str = ""
     jira_project_key: str = ""
+
+    notion_api_token: str = ""
+    notion_api_version: str = "2025-09-03"
     notion_data_source_id: str = ""
+    notion_title_property: str = "Name"
 
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

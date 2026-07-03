@@ -15,7 +15,7 @@ dependencies = [
     "redis>=5.2",
     "pydantic-settings>=2.7",
     "apscheduler>=3.11",
-    "mcp>=1.6",
+    "httpx>=0.28",                        # Jira/Notion REST calls
     "psycopg[binary]>=3.2",               # checkpointer needs sync psycopg
 ]
 
