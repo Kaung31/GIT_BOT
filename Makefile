@@ -11,3 +11,9 @@ backfill:  # make backfill CHANNEL=C0123456789
 
 test:
 	uv run pytest -q
+
+seed: up  # fake workspace data, no Slack needed
+	uv run python -m scripts.seed_demo_workspace
+
+evals: up
+	uv run python -m evals.run_evals

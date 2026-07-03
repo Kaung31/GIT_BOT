@@ -12,7 +12,29 @@ services:
     image: redis:7-alpine
     ports: ["6379:6379"]
 
-# ponytail: ollama runs on the host (brew), langfuse optional — add services here if you want them containerized
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://slackagent:slackagent@postgres:5432/slackagent
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_API_BASE: http://host.docker.internal:11434
+    depends_on: [postgres, redis]
+    profiles: [app]   # opt-in: `docker compose --profile app up`; `make dev` runs it on the host
+
+  langfuse:
+    image: langfuse/langfuse:2
+    environment:
+      DATABASE_URL: postgresql://slackagent:slackagent@postgres:5432/langfuse
+      NEXTAUTH_SECRET: changeme
+      NEXTAUTH_URL: http://localhost:3000
+      SALT: changeme
+    ports: ["3000:3000"]
+    depends_on: [postgres]
+    profiles: [observability]   # opt-in: `docker compose --profile observability up`
+
+# ponytail: ollama runs on the host (brew); langfuse v2 single-container needs its own DB —
+# create it once: docker compose exec postgres createdb -U slackagent langfuse
 
 volumes:
   pgdata:

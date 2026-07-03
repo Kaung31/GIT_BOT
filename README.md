@@ -27,7 +27,13 @@ uv sync
 make dev                      # starts bot + ingestion worker + scheduler
 make backfill CHANNEL=C0123…  # one-off history load per channel
 make test
+make seed                     # no Slack yet? seed fake demo data into the mirror
+make evals                    # summary faithfulness (LLM-judge) + extraction precision/recall
 ```
+
+Optional: `docker compose --profile app up` runs the bot containerized;
+`--profile observability` adds self-hosted Langfuse (tracing activates when the
+`LANGFUSE_*` env keys are set).
 
 ### Slack app config (api.slack.com/apps)
 - Socket Mode **on** (needs an app-level token with `connections:write`)
