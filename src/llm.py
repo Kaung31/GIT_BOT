@@ -1,5 +1,8 @@
-"""Model plane: litellm (one interface for local + cloud) with the three guards
-in front — semantic cache, token buckets, recursion ceiling (enforced in graph.py)."""
+"""Model plane: litellm with per-agent routing (Sonnet writes, Haiku critiques on demo day;
+all Ollama during development) plus the guards — semantic cache, per-run token bucket,
+hard daily USD spend cap. Recursion ceiling lives in graph.py."""
+import datetime as dt
+import logging
 import os
 from pathlib import Path
 
@@ -10,6 +13,7 @@ from sqlalchemy import select, text
 from src.config import settings
 from src.store import CacheEntry, Session
 
+log = logging.getLogger(__name__)
 PROMPTS = Path(__file__).parent / "prompts"
 
 if settings.langfuse_public_key:
@@ -25,22 +29,30 @@ class BudgetExceeded(Exception):
     pass
 
 
-async def _check_budget(user: str | None, channel: str | None) -> None:
-    """Token bucket per user + channel, sliding 1h window in redis."""
-    for key, limit in ((f"budget:user:{user}", settings.token_bucket_per_user),
-                       (f"budget:chan:{channel}", settings.token_bucket_per_channel)):
-        if key.endswith("None"):
-            continue
-        used = int(await _redis.get(key) or 0)
-        if used >= limit:
-            raise BudgetExceeded(f"token budget exhausted for {key}")
+async def _check_budget(run_id: str) -> None:
+    used = int(await _redis.get(f"budget:run:{run_id}") or 0)
+    if used >= settings.token_bucket_per_run:
+        raise BudgetExceeded(f"token bucket exhausted for run {run_id}")
+    spent = float(await _redis.get(_spend_key()) or 0)
+    if spent >= settings.daily_spend_cap_usd:
+        raise BudgetExceeded(f"daily spend cap ${settings.daily_spend_cap_usd} reached")
 
 
-async def _spend(user: str | None, channel: str | None, tokens: int) -> None:
-    for key in (f"budget:user:{user}", f"budget:chan:{channel}"):
-        if not key.endswith("None"):
-            await _redis.incrby(key, tokens)
-            await _redis.expire(key, 3600, nx=True)
+def _spend_key() -> str:
+    return f"spend:usd:{dt.date.today().isoformat()}"
+
+
+async def _record(run_id: str, resp) -> None:
+    tokens = resp.usage.total_tokens if resp.usage else 0
+    await _redis.incrby(f"budget:run:{run_id}", tokens)
+    await _redis.expire(f"budget:run:{run_id}", 86400, nx=True)
+    try:
+        cost = litellm.completion_cost(resp) or 0.0
+    except Exception:
+        cost = 0.0  # local models have no price
+    if cost:
+        await _redis.incrbyfloat(_spend_key(), cost)
+        await _redis.expire(_spend_key(), 86400 * 2, nx=True)
 
 
 def prompt(name: str, **kwargs) -> str:
@@ -53,9 +65,9 @@ async def embed(texts: list[str]) -> list[list[float]]:
     return [d["embedding"] for d in resp.data]
 
 
-async def complete(prompt_text: str, *, user: str | None = None, channel: str | None = None,
+async def complete(model: str, prompt_text: str, *, run_id: str,
                    cache: bool = False, json_mode: bool = False) -> str:
-    await _check_budget(user, channel)
+    await _check_budget(run_id)
 
     query_emb = None
     if cache:
@@ -72,13 +84,13 @@ async def complete(prompt_text: str, *, user: str | None = None, channel: str | 
                 return hit.output
 
     resp = await litellm.acompletion(
-        model=settings.llm_model,
+        model=model,
         messages=[{"role": "user", "content": prompt_text}],
-        api_base=settings.ollama_api_base if settings.llm_model.startswith("ollama/") else None,
+        api_base=settings.ollama_api_base if model.startswith("ollama/") else None,
         response_format={"type": "json_object"} if json_mode else None,
     )
     out = resp.choices[0].message.content or ""
-    await _spend(user, channel, resp.usage.total_tokens if resp.usage else 0)
+    await _record(run_id, resp)
 
     if cache and query_emb is not None:
         async with Session() as s:

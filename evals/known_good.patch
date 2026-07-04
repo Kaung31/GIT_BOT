@@ -1,0 +1,31 @@
+diff --git a/ledger.py b/ledger.py
+index c83c2d8..401acfc 100644
+--- a/ledger.py
++++ b/ledger.py
+@@ -4,22 +4,22 @@ import sqlite3
+ 
+ def last_n(entries, n):
+     """Return the most recent n entries."""
+-    return entries[-n:-1]  # BUG: off-by-one, drops the newest entry
++    return entries[-n:]
+ 
+ 
+ def total(entries):
+     """Sum all amounts."""
+-    return sum(e["amount"] for e in entries)  # BUG: crashes when amount is None
++    return sum(e["amount"] for e in entries if e["amount"] is not None)
+ 
+ 
+ def average(entries):
+     """Average spend per entry."""
+-    return total(entries) / len(entries)  # BUG: ZeroDivisionError on empty ledger
++    return total(entries) / len(entries) if entries else 0
+ 
+ 
+ def find_by_desc(db: sqlite3.Connection, desc: str):
+     """Find entries matching a description."""
+-    cur = db.execute(f"SELECT desc, amount FROM entries WHERE desc = '{desc}'")  # BUG: SQL injection
++    cur = db.execute("SELECT desc, amount FROM entries WHERE desc = ?", (desc,))
+     return cur.fetchall()
+ 
+ 

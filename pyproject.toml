@@ -1,11 +1,11 @@
 [project]
-name = "slack-productivity-agent"
+name = "code-review-swarm"
 version = "0.1.0"
-description = "Slack multi-agent: summarize threads, extract tasks, Jira/Notion sync with human approval"
+description = "Adversarial code-review swarm: Proposer writes a patch, Breaker attacks it, Arbitrator judges, human approves via Telegram"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "slack-bolt>=1.21",
-    "aiohttp>=3.10",                      # Bolt async socket mode
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
     "litellm>=1.60",
     "langgraph>=0.3",
     "langgraph-checkpoint-postgres>=2.0",
@@ -14,8 +14,7 @@ dependencies = [
     "pgvector>=0.3",
     "redis>=5.2",
     "pydantic-settings>=2.7",
-    "apscheduler>=3.11",
-    "httpx>=0.28",                        # Jira/Notion REST calls
+    "httpx>=0.28",                        # GitHub REST + Telegram Bot API
     "psycopg[binary]>=3.2",               # checkpointer needs sync psycopg
 ]
 
@@ -25,3 +24,4 @@ dev = ["pytest>=8", "pytest-asyncio>=0.25"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
+testpaths = ["tests"]  # keep the seeded demo repo's intentionally-failing tests out

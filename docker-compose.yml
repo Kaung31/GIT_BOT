@@ -2,9 +2,9 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_USER: slackagent
-      POSTGRES_PASSWORD: slackagent
-      POSTGRES_DB: slackagent
+      POSTGRES_USER: swarm
+      POSTGRES_PASSWORD: swarm
+      POSTGRES_DB: swarm
     ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
 
@@ -12,29 +12,19 @@ services:
     image: redis:7-alpine
     ports: ["6379:6379"]
 
-  app:
-    build: .
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://slackagent:slackagent@postgres:5432/slackagent
-      REDIS_URL: redis://redis:6379/0
-      OLLAMA_API_BASE: http://host.docker.internal:11434
-    depends_on: [postgres, redis]
-    profiles: [app]   # opt-in: `docker compose --profile app up`; `make dev` runs it on the host
-
   langfuse:
     image: langfuse/langfuse:2
     environment:
-      DATABASE_URL: postgresql://slackagent:slackagent@postgres:5432/langfuse
+      DATABASE_URL: postgresql://swarm:swarm@postgres:5432/langfuse
       NEXTAUTH_SECRET: changeme
       NEXTAUTH_URL: http://localhost:3000
       SALT: changeme
     ports: ["3000:3000"]
     depends_on: [postgres]
-    profiles: [observability]   # opt-in: `docker compose --profile observability up`
+    profiles: [observability]  # opt-in; create its DB once: docker compose exec postgres createdb -U swarm langfuse
 
-# ponytail: ollama runs on the host (brew); langfuse v2 single-container needs its own DB —
-# create it once: docker compose exec postgres createdb -U slackagent langfuse
+# ponytail: ollama runs on the host; the app runs on the host too (it drives docker for the
+# sandbox — containerizing it means docker-in-docker for no demo value)
 
 volumes:
   pgdata:

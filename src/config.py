@@ -4,39 +4,41 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    slack_bot_token: str
-    slack_app_token: str
-    slack_signing_secret: str = ""
+    github_webhook_secret: str = "changeme"
+    github_token: str
+    target_repos: str = ""             # comma-separated owner/name
+    trigger_label: str = "swarm-fix"
 
-    llm_model: str = "ollama/qwen3:14b"
+    telegram_bot_token: str
+    telegram_chat_id: str
+
+    proposer_model: str = "ollama/qwen2.5-coder:14b"
+    breaker_model: str = "ollama/qwen3:14b"
+    arbitrator_model: str = "ollama/qwen3:14b"
     embed_model: str = "ollama/nomic-embed-text"
     embed_dim: int = 768
     ollama_api_base: str = "http://localhost:11434"
 
-    database_url: str = "postgresql+asyncpg://slackagent:slackagent@localhost:5432/slackagent"
+    database_url: str = "postgresql+asyncpg://swarm:swarm@localhost:5432/swarm"
     redis_url: str = "redis://localhost:6379/0"
+    repos_dir: str = "./repos"
 
-    jira_base_url: str = ""       # https://yoursite.atlassian.net
-    jira_email: str = ""
-    jira_api_token: str = ""
-    jira_project_key: str = ""
+    graph_recursion_limit: int = 40  # hub topology: ~11 supersteps/run + ~7 per revise round
+    max_revision_rounds: int = 2
+    token_bucket_per_run: int = 250_000
+    daily_spend_cap_usd: float = 1.50
 
-    notion_api_token: str = ""
-    notion_api_version: str = "2025-09-03"
-    notion_data_source_id: str = ""
-    notion_title_property: str = "Name"
+    sandbox_image: str = "swarm-sandbox"
+    sandbox_timeout_s: int = 180
+    sandbox_memory_mb: int = 1024
 
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = ""
 
-    graph_recursion_limit: int = 12
-    token_bucket_per_user: int = 50_000
-    token_bucket_per_channel: int = 200_000
-
-    standup_channel: str = ""
-    standup_cron: str = "0 9 * * mon-fri"
-    standup_collect_minutes: int = 60
+    @property
+    def repos(self) -> list[str]:
+        return [r.strip() for r in self.target_repos.split(",") if r.strip()]
 
 
 settings = Settings()

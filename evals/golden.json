@@ -1,0 +1,26 @@
+[
+  {
+    "title": "last_n drops the most recent entry",
+    "body": "Calling last_n(entries, 2) returns only 1 entry and it's not the newest. Expected: the last n entries including the most recent one. See test_last_n_returns_newest.",
+    "bug_keyword": "off-by-one",
+    "breaker_hints": ["off-by-one", "off by one", "-1", "slice", "newest", "last element"]
+  },
+  {
+    "title": "total() crashes when an entry has amount=None",
+    "body": "Pending entries have amount=None until they clear. total() raises TypeError on them — it should skip None amounts. See test_total_skips_none_amounts.",
+    "bug_keyword": "None handling",
+    "breaker_hints": ["none", "typeerror", "null"]
+  },
+  {
+    "title": "average() raises ZeroDivisionError on an empty ledger",
+    "body": "average([]) should return 0, not crash with ZeroDivisionError. See test_average_empty_ledger_is_zero.",
+    "bug_keyword": "empty-list edge case",
+    "breaker_hints": ["zerodivision", "empty", "division by zero", "len("]
+  },
+  {
+    "title": "find_by_desc is vulnerable to SQL injection",
+    "body": "The description is interpolated straight into the SQL string. A desc like \"x' OR '1'='1\" dumps the whole table. Use parameterized queries. See test_find_by_desc_is_injection_safe.",
+    "bug_keyword": "SQL injection",
+    "breaker_hints": ["sql injection", "parameterized", "parametrized", "injection", "interpolat"]
+  }
+]
