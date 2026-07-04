@@ -47,50 +47,93 @@ make tunnel                      # ngrok for the GitHub webhook
 | Label an issue `swarm-fix` | Full swarm writes a patch → sandbox-tested → verdict → Telegram Approve → real PR opens |
 | Open a PR | Breaker + Arbitrator review it (cheap mode) → Telegram Approve → review comment posted |
 
-## What's left (your side) — in order
+## Full runbook: zero → demo done
 
-The code is built and tested; these are the manual steps, and **order matters** — verify caching
-before you spend on a paid eval:
+Follow top to bottom. **You never point this at your real projects.** The target is a *throwaway
+demo repo* the seed script creates for you — and even then the bot only ever opens a PR you can
+close. Everything through Phase 5 is **free** (Ollama); only Phase 6 spends the Anthropic budget.
 
-1. **Pick models for your hardware** — `uv run python -m scripts.recommend_models`, pull them.
-2. **Telegram** bot token + chat id ([step 1](#1-telegram-bot-2-minutes)).
-3. **GitHub** fine-grained PAT (with expiry) + webhook + `swarm-fix` label ([step 2](#2-github-app-side-5-minutes)).
-4. **Langfuse** — `make langfuse`, paste keys, do a run, screenshot the trace tree.
-5. **Verify caching** — add `ANTHROPIC_API_KEY`, run `scripts/verify_caching.py` (~$0.10). **Do this before step 6.**
-6. **Paid eval run** — flip models to Anthropic, `make evals` (results are labeled with the model names).
-7. **Rehearse the restart-resume demo** ([below](#restart-resume-demo-rehearse-last)).
-
-## Step-by-step setup
-
-### 1. Telegram bot (2 minutes)
-1. Message **@BotFather** → `/newbot` → pick a name → copy the token → `TELEGRAM_BOT_TOKEN`.
-2. Send your new bot any message, then open
-   `https://api.telegram.org/bot<TOKEN>/getUpdates` — your `chat.id` is in the reply →
-   `TELEGRAM_CHAT_ID`. Only this chat can approve; button taps from anyone else are ignored.
-
-### 2. GitHub app-side (5 minutes)
-1. **Fine-grained PAT** (never a classic full-scope token): github.com → Settings → Developer
-   settings → Fine-grained tokens. Scope it to **only your demo repos**, with **Read+Write on
-   Contents, Pull requests, and Issues** (nothing else), and **set an expiry date** (e.g. 90 days
-   — don't pick "no expiration"). → `GITHUB_TOKEN`.
-2. Per target repo: Settings → Webhooks → Add webhook →
-   Payload URL `https://<your-ngrok-domain>/webhooks/github`, content type `application/json`,
-   a secret you invent (→ `GITHUB_WEBHOOK_SECRET`), events: **Issues, Pull requests, Pushes**.
-3. Create the label `swarm-fix` in the repo (Issues → Labels).
-4. List the repos in `TARGET_REPOS=owner/name,owner/name2`.
-
-### 3. Demo repo + first run
+### Phase 0 — local setup (once, ~10 min)
 ```bash
-make seed SEED_REPO=you/swarm-demo   # creates the repo on GitHub, pushes, files the 4 issues
-make dev & make tunnel               # or two terminals
+cp .env.example .env
+uv run python -m scripts.recommend_models     # prints your model tier; pull what it lists:
+ollama pull qwen2.5-coder:14b && ollama pull qwen3:14b && ollama pull nomic-embed-text
+make up            # postgres + redis
+make sandbox-image # the container the Breaker runs tests in
+uv sync
+make test          # must print "11 passed"
 ```
-Then label one of the filed issues `swarm-fix` and watch: Telegram pings you that the run
-started, then delivers the verdict card with the diff, findings, confidence, and
-**[✅ Approve] [❌ Reject]**. Tap Approve → a real PR appears on the repo.
 
-**The restart trick (interview centerpiece):** while a verdict card sits unanswered on your
-phone, kill `make dev`, restart it, then tap Approve — the run resumes from its Postgres
-checkpoint and the PR still opens.
+### Phase 1 — Telegram (~2 min)
+1. Message **@BotFather** → `/newbot` → name it → copy the token → `TELEGRAM_BOT_TOKEN` in `.env`.
+2. DM your new bot any message, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a
+   browser → copy the numeric `chat.id` from the JSON → `TELEGRAM_CHAT_ID`. Only that id can approve.
+
+### Phase 2 — GitHub token (~3 min)
+Fine-grained PAT (never a classic token): github.com → Settings → Developer settings →
+Fine-grained tokens → **only the demo repo you'll make next**, **Read+Write on Contents +
+Pull requests + Issues** (nothing else), **set a 90-day expiry** → `GITHUB_TOKEN` in `.env`.
+
+### Phase 3 — create the throwaway test repo (~3 min)
+This is the "don't touch your real projects" step. `make seed` creates a **brand-new private repo**
+full of planted bugs — it is not your real code:
+```bash
+make seed SEED_REPO=you/swarm-demo   # creates the repo on GitHub, pushes, files 8 bug issues
+```
+Then wire it up:
+1. `.env`: set `TARGET_REPOS=you/swarm-demo` and invent a `GITHUB_WEBHOOK_SECRET`.
+2. `make tunnel` (leave running) → copy the `https://…ngrok…` URL.
+3. On GitHub → the **swarm-demo** repo → Settings → Webhooks → Add webhook:
+   Payload URL `https://<ngrok>/webhooks/github`, content type `application/json`,
+   Secret = your `GITHUB_WEBHOOK_SECRET`, events: **Issues, Pull requests, Pushes**.
+4. In that repo, Issues → Labels → create `swarm-fix`.
+
+### Phase 4 — first live run, FREE on Ollama (~5 min)
+```bash
+make dev           # keep `make tunnel` running in another terminal
+```
+1. On GitHub, open the **swarm-demo** repo → Issues → pick one → add the **`swarm-fix`** label.
+2. Telegram pings "🐝 swarm run started", then a verdict card: diff, findings, confidence,
+   **[✅ Approve] [❌ Reject]**.
+3. Tap **Approve** → a PR opens on swarm-demo. Open it, look, then **Close it** (don't merge —
+   nothing here needs shipping). Full loop proven, **$0 spent**.
+4. Try **PR-review mode** too: open any PR on swarm-demo → the bot posts an adversarial review →
+   Approve → it comments on the PR. Close the PR.
+
+### Phase 5 — Langfuse trace + local eval numbers (~10 min) — your CV figures
+```bash
+make langfuse      # http://localhost:3000 → sign up → new project → keys into .env → restart `make dev`
+```
+- Do one run → Langfuse → Traces → screenshot the `swarm-run` tree (per-agent tokens + cost). **Figure 1.**
+```bash
+make evals         # 8 planted bugs, labeled with the model names
+```
+- Screenshot the results table — your **local** patch-applies / tests-pass / breaker-recall. **Figure 2.**
+
+### Phase 6 — the paid demo-day run (spends the £4.90) — do these IN ORDER
+1. Add `ANTHROPIC_API_KEY` to `.env`.
+2. **Verify caching FIRST:** `make verify-caching` (~$0.10). It must print `cache_read > 0` on call 2.
+   (If it doesn't, fix it before spending more — see the reference section below.)
+3. Flip models in `.env`: `PROPOSER_MODEL=anthropic/claude-sonnet-4-6`,
+   `BREAKER_MODEL` and `ARBITRATOR_MODEL` = `anthropic/claude-haiku-4-5`.
+4. `make evals` → screenshot the **Anthropic** numbers beside your local ones. **Figure 3.**
+5. Do 2–3 live labeled-issue runs for the recording. `DAILY_SPEND_CAP_USD=1.50` halts any runaway.
+
+### Phase 7 — the showpiece: restart survives a restart (record this)
+`make verify-resume` proves it headless anytime (green, no LLM/GitHub). For the live take:
+label an issue → wait for the Telegram card → `docker compose down` → wait 10s →
+`docker compose up -d && make dev` → tap **Approve** → the PR still opens. Screen-record it.
+
+### Phase 8 — done + cleanup
+- Delete or archive the **swarm-demo** repo — it's disposable.
+- Your PAT expires on its own; revoke it early if you like.
+- Keep the four artifacts (Langfuse trace, local eval table, Anthropic eval table, restart recording).
+  **That's your portfolio — the demo is done.**
+
+### Optional: one "real code" data point without touching a finished project
+Want to show it on real code? **Copy/fork one finished project into a new repo** (e.g.
+`you/swarm-test-myproject`), point `TARGET_REPOS` at the *copy*, and use PR-review mode: open a
+throwaway PR there, let the bot review it, close it. Your original repo is never touched.
 
 ## Budget guardrails for the £4.90
 
@@ -109,45 +152,21 @@ tests-pass %, breaker recall** on the planted bugs, plus verdicts and revise rou
 `evals/known_good.patch` is the reference fix for all 8 — the sandbox goes green with it applied
 (verified), so a perfect proposer scores 8/8.
 
-## Observability, caching & the demo (your side)
+## Reference: the why behind the runbook
 
-The code side of all of these is done and tested. Here's the manual half:
-
-### Langfuse tracing
-1. `make langfuse` — brings up Langfuse on http://localhost:3000 and creates its DB.
-2. Sign up (local account), create a project, copy the public + secret keys into `.env`
-   (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST=http://localhost:3000`).
-3. Do one swarm run. Open Langfuse → Traces. Each run is one trace named `swarm-run`, grouped by
-   run id, with a generation per agent (`proposer`/`breaker`/`arbitrator`) tagged with the model
-   and showing per-call tokens and cost. The gateway already emits this metadata — screenshot the
-   trace tree; that's your "exact cost of every run" README figure.
-
-### Prompt caching (verify before spending)
-Prompts are split into a stable prefix (role + rules + repo context + issue) and a variable suffix
-(patch/findings/test); for `anthropic/*` models the stable prefix carries `cache_control`.
-**Anthropic silently skips caching below a per-model minimum: 1,024 tokens for Sonnet but 4,096
-for Haiku.** The Breaker/Arbitrator run on Haiku, so they retrieve more context chunks
-(`BREAKER/ARBITRATOR_CONTEXT_CHUNKS=12`) to clear it, and the gateway logs a `caching DISABLED`
-warning per agent whenever a real prefix still falls short.
-
-To confirm caching is actually engaging **before any paid run**:
-1. Add `ANTHROPIC_API_KEY` to `.env`.
-2. `uv run python -m scripts.verify_caching` — makes two identical cheap Haiku calls (~$0.10,
-   refuses to run without the key, respects the daily spend cap) and prints
-   `cache_creation_input_tokens` / `cache_read_input_tokens` for each. It exits non-zero if the
-   second call didn't read from cache.
-3. **Caveat:** the tiny demo repo's context is well under 4,096 tokens, so caching legitimately
-   won't engage on it — `verify_caching.py` uses a large synthetic prefix to test the mechanism,
-   and real target repos with 12 real-function chunks clear the minimum. If it's 0 on a big repo,
-   the wiring is broken; 0 on the toy repo is expected.
-
-### Restart-resume demo (rehearse last)
-- `make verify-resume` proves the checkpoint survives a process restart automatically (no LLM,
-  no GitHub) — run it any time; it's green.
-- For the live version: label an issue → wait for the Telegram card → `docker compose down` →
-  count to ten → `docker compose up -d && make dev` → tap Approve → the PR opens. Screen-record
-  it once as a backup. If the live one ever fails but `make verify-resume` passes, the problem is
-  in the Telegram callback → `on_decision` wiring, not the checkpointer.
+- **Langfuse trace** — each run is one trace named `swarm-run`, grouped by run id, one generation
+  per agent (`proposer`/`breaker`/`arbitrator`) tagged with the model, showing per-call tokens and
+  cost. That's your "I know the exact cost of every run" figure.
+- **Prompt caching minimums** — Anthropic silently skips caching if the cached prefix is below a
+  per-model floor: **1,024 tokens for Sonnet, 4,096 for Haiku**. Prompts are split into a stable
+  prefix (role + rules + repo context + issue, marked `cache_control`) and a variable suffix, and
+  the Haiku agents retrieve more chunks (`BREAKER/ARBITRATOR_CONTEXT_CHUNKS=12`) to clear 4,096.
+  The gateway logs a `caching DISABLED` warning per agent when a real prefix still falls short.
+  If `make verify-caching` shows `cache_read=0` on call 2: prefix under the minimum, model isn't
+  `anthropic/…`, or >5 min elapsed between calls (TTL). The toy demo repo is legitimately under
+  4,096 — that's why `verify_caching.py` uses a large synthetic prefix to test the mechanism.
+- **Restart-resume** — if the live restart fails but `make verify-resume` passes, the bug is in the
+  Telegram callback → `on_decision` wiring, not the Postgres checkpointer.
 
 ## Security notes
 
