@@ -1,7 +1,15 @@
-.PHONY: dev up test evals seed sandbox-image tunnel
+.PHONY: dev up test evals seed sandbox-image tunnel langfuse verify-resume
 
 up:
 	docker compose up -d
+
+langfuse: up  # self-hosted tracing on http://localhost:3000 (first run creates its DB)
+	-docker compose exec -T postgres createdb -U swarm langfuse 2>/dev/null || true
+	docker compose --profile observability up -d langfuse
+	@echo "Langfuse at http://localhost:3000 — sign up, create a project, copy the keys into .env"
+
+verify-resume: up  # prove the checkpoint survives a process restart (no LLM/GitHub needed)
+	uv run python -m scripts.verify_resume
 
 sandbox-image:
 	docker build -f Dockerfile.sandbox -t swarm-sandbox .

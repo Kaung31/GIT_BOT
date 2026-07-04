@@ -1,6 +1,11 @@
 """Model plane: litellm with per-agent routing (Sonnet writes, Haiku critiques on demo day;
 all Ollama during development) plus the guards — semantic cache, per-run token bucket,
-hard daily USD spend cap. Recursion ceiling lives in graph.py."""
+hard daily USD spend cap. Recursion ceiling lives in graph.py.
+
+Prompt caching: each prompt splits at ===VARIABLE=== into a STABLE prefix (role + rules + repo
+context + issue — identical across revise rounds) and a VARIABLE suffix (patch/findings/test).
+For Anthropic the stable prefix carries cache_control so round-2 calls read it at 90% off; for
+Ollama it's a plain system message (cache_control is Anthropic-only)."""
 import datetime as dt
 import logging
 import os
@@ -15,6 +20,7 @@ from src.store import CacheEntry, Session
 
 log = logging.getLogger(__name__)
 PROMPTS = Path(__file__).parent / "prompts"
+CACHE_SPLIT = "===VARIABLE==="
 
 if settings.langfuse_public_key:
     os.environ.setdefault("LANGFUSE_PUBLIC_KEY", settings.langfuse_public_key)
@@ -42,21 +48,41 @@ def _spend_key() -> str:
     return f"spend:usd:{dt.date.today().isoformat()}"
 
 
-async def _record(run_id: str, resp) -> None:
-    tokens = resp.usage.total_tokens if resp.usage else 0
+async def _record(run_id: str, agent: str, resp) -> None:
+    u = resp.usage
+    tokens = u.total_tokens if u else 0
     await _redis.incrby(f"budget:run:{run_id}", tokens)
     await _redis.expire(f"budget:run:{run_id}", 86400, nx=True)
+    cache_read = getattr(u, "cache_read_input_tokens", 0) or 0
+    cache_write = getattr(u, "cache_creation_input_tokens", 0) or 0
     try:
         cost = litellm.completion_cost(resp) or 0.0
     except Exception:
         cost = 0.0  # local models have no price
+    log.info("llm %s: %d tok, cache_read=%d cache_write=%d, $%.4f",
+             agent, tokens, cache_read, cache_write, cost)
     if cost:
         await _redis.incrbyfloat(_spend_key(), cost)
         await _redis.expire(_spend_key(), 86400 * 2, nx=True)
 
 
-def prompt(name: str, **kwargs) -> str:
-    return (PROMPTS / f"{name}.md").read_text().format(**kwargs)
+def prompt(name: str, **kwargs) -> tuple[str, str]:
+    """Return (stable_prefix, variable_suffix) split on the ===VARIABLE=== marker."""
+    text_ = (PROMPTS / f"{name}.md").read_text().format(**kwargs)
+    stable, _, variable = text_.partition(CACHE_SPLIT)
+    return stable.strip(), variable.strip()
+
+
+def _messages(model: str, system: str, user: str) -> list[dict]:
+    if model.startswith("anthropic/"):
+        # cache_control marks the stable prefix as a reusable cache breakpoint
+        return [
+            {"role": "system", "content": [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": user or "Proceed."},
+        ]
+    return [{"role": "system", "content": system},
+            {"role": "user", "content": user or "Proceed."}]
 
 
 async def embed(texts: list[str]) -> list[list[float]]:
@@ -65,13 +91,13 @@ async def embed(texts: list[str]) -> list[list[float]]:
     return [d["embedding"] for d in resp.data]
 
 
-async def complete(model: str, prompt_text: str, *, run_id: str,
+async def complete(model: str, system: str, user: str, *, run_id: str, agent: str = "",
                    cache: bool = False, json_mode: bool = False) -> str:
     await _check_budget(run_id)
 
     query_emb = None
     if cache:
-        query_emb = (await embed([prompt_text]))[0]
+        query_emb = (await embed([system + user]))[0]
         async with Session() as s:
             hit = (await s.execute(
                 select(CacheEntry)
@@ -85,12 +111,14 @@ async def complete(model: str, prompt_text: str, *, run_id: str,
 
     resp = await litellm.acompletion(
         model=model,
-        messages=[{"role": "user", "content": prompt_text}],
+        messages=_messages(model, system, user),
         api_base=settings.ollama_api_base if model.startswith("ollama/") else None,
         response_format={"type": "json_object"} if json_mode else None,
+        metadata={"trace_id": run_id, "trace_name": "swarm-run",
+                  "generation_name": agent or "llm", "tags": [agent, model.split("/")[-1]]},
     )
     out = resp.choices[0].message.content or ""
-    await _record(run_id, resp)
+    await _record(run_id, agent, resp)
 
     if cache and query_emb is not None:
         async with Session() as s:

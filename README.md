@@ -84,11 +84,46 @@ and the graph recursion ceiling back that up.
 
 ## Evals
 
-`make evals` replays the 4 seeded issues (off-by-one, None-handling, empty-list edge case,
-SQL injection) through the swarm against the local mirror and reports **patch-applies %,
+`make evals` replays the 8 seeded issues (off-by-one slice, None-handling, empty-list edge case,
+SQL injection, wrong comparison operator, mutable default argument, integer-division money bug,
+off-by-one pagination) through the swarm against the local mirror and reports **patch-applies %,
 tests-pass %, breaker recall** on the planted bugs, plus verdicts and revise rounds.
-`evals/known_good.patch` is the reference fix — the sandbox goes green with it applied
-(verified), so a perfect proposer scores 4/4.
+`evals/known_good.patch` is the reference fix for all 8 — the sandbox goes green with it applied
+(verified), so a perfect proposer scores 8/8.
+
+## Observability, caching & the demo (your side)
+
+The code side of all of these is done and tested. Here's the manual half:
+
+### Langfuse tracing
+1. `make langfuse` — brings up Langfuse on http://localhost:3000 and creates its DB.
+2. Sign up (local account), create a project, copy the public + secret keys into `.env`
+   (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST=http://localhost:3000`).
+3. Do one swarm run. Open Langfuse → Traces. Each run is one trace named `swarm-run`, grouped by
+   run id, with a generation per agent (`proposer`/`breaker`/`arbitrator`) tagged with the model
+   and showing per-call tokens and cost. The gateway already emits this metadata — screenshot the
+   trace tree; that's your "exact cost of every run" README figure.
+
+### Prompt caching (verify before spending on Sonnet)
+Prompts are already split into a stable prefix (role + rules + repo context + issue) and a
+variable suffix (patch/findings/test), and for `anthropic/*` models the stable prefix carries
+`cache_control`. To confirm it's live:
+1. Set the three models to `anthropic/claude-haiku-4-5` in `.env`, add `ANTHROPIC_API_KEY`.
+2. Run the same issue twice within 5 minutes (Anthropic's cache TTL). Watch the app logs — each
+   LLM call logs `cache_read=… cache_write=…`. First run: `cache_write` > 0. Second run:
+   `cache_read` > 0. That's caching working (~$0.20 total for the test).
+3. **Caveat:** Anthropic only caches prefixes above a minimum size (~2048 tokens for Haiku). The
+   tiny demo repo may fall under that, so `cache_read` can read 0 — test against a real repo with
+   more context, or just confirm the mechanism on a larger issue. If it's 0 on a big repo, the
+   `cache_control` wiring is broken; if it's 0 only on the toy repo, that's expected.
+
+### Restart-resume demo (rehearse last)
+- `make verify-resume` proves the checkpoint survives a process restart automatically (no LLM,
+  no GitHub) — run it any time; it's green.
+- For the live version: label an issue → wait for the Telegram card → `docker compose down` →
+  count to ten → `docker compose up -d && make dev` → tap Approve → the PR opens. Screen-record
+  it once as a backup. If the live one ever fails but `make verify-resume` passes, the problem is
+  in the Telegram callback → `on_decision` wiring, not the checkpointer.
 
 ## Security notes
 

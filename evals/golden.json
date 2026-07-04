@@ -2,7 +2,7 @@
   {
     "title": "last_n drops the most recent entry",
     "body": "Calling last_n(entries, 2) returns only 1 entry and it's not the newest. Expected: the last n entries including the most recent one. See test_last_n_returns_newest.",
-    "bug_keyword": "off-by-one",
+    "bug_keyword": "off-by-one (slice)",
     "breaker_hints": ["off-by-one", "off by one", "-1", "slice", "newest", "last element"]
   },
   {
@@ -22,5 +22,29 @@
     "body": "The description is interpolated straight into the SQL string. A desc like \"x' OR '1'='1\" dumps the whole table. Use parameterized queries. See test_find_by_desc_is_injection_safe.",
     "bug_keyword": "SQL injection",
     "breaker_hints": ["sql injection", "parameterized", "parametrized", "injection", "interpolat"]
+  },
+  {
+    "title": "is_within_budget is wrong when spending equals the limit",
+    "body": "is_within_budget(100, 100) returns False, but spending exactly up to the limit should count as within budget. See test_is_within_budget_boundary.",
+    "bug_keyword": "wrong comparison operator",
+    "breaker_hints": ["operator", "<=", "boundary", "equal", "off-by-one", "comparison"]
+  },
+  {
+    "title": "add_entry shares state between unrelated calls",
+    "body": "Two independent add_entry() calls accumulate into the same list — the second call sees the first call's entry. Classic mutable default argument. See test_add_entry_does_not_share_state.",
+    "bug_keyword": "mutable default argument",
+    "breaker_hints": ["mutable default", "default argument", "ledger=[]", "shared", "none"]
+  },
+  {
+    "title": "split_bill loses the cents",
+    "body": "split_bill(10.0, 4) returns 2.0 instead of 2.5 — it uses integer division and drops the fractional part. See test_split_bill_keeps_cents.",
+    "bug_keyword": "integer division (money)",
+    "breaker_hints": ["integer division", "floor", "//", "float", "cents", "rounding"]
+  },
+  {
+    "title": "page() pagination is off by one page",
+    "body": "page(entries, 1, 3) returns the second page, not the first. Pages are 1-based, so page 1 should start at index 0. See test_page_is_one_based.",
+    "bug_keyword": "off-by-one (pagination)",
+    "breaker_hints": ["off-by-one", "off by one", "page_num - 1", "1-based", "start", "index"]
   }
 ]

@@ -34,6 +34,12 @@ async def send_approval(thread_id: str, card: str) -> None:
                 ]]})
 
 
+def authorized(cq: dict) -> bool:
+    """Only the configured user may approve. Check who actually clicked (from.id), not just
+    which chat the card sits in — defends the case where the bot is in a shared chat."""
+    return str(cq.get("from", {}).get("id")) == str(settings.telegram_chat_id)
+
+
 def verdict_card(state: dict) -> str:
     v = state.get("verdict") or {}
     findings = state.get("findings", [])
@@ -64,8 +70,8 @@ async def poll_updates(on_decision) -> None:
             cq = u.get("callback_query")
             if not cq:
                 continue
-            if str(cq["message"]["chat"]["id"]) != str(settings.telegram_chat_id):
-                log.warning("callback from unauthorized chat %s ignored", cq["message"]["chat"]["id"])
+            if not authorized(cq):
+                log.warning("callback from unauthorized user %s ignored", cq.get("from", {}).get("id"))
                 continue
             decision, thread_id = cq["data"].split(":", 1)
             await _post("answerCallbackQuery", callback_query_id=cq["id"], text=f"{decision}d")

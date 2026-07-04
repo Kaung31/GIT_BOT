@@ -1,8 +1,8 @@
 diff --git a/ledger.py b/ledger.py
-index c83c2d8..401acfc 100644
+index 00adf5d..80d90ab 100644
 --- a/ledger.py
 +++ b/ledger.py
-@@ -4,22 +4,22 @@ import sqlite3
+@@ -4,44 +4,45 @@ import sqlite3
  
  def last_n(entries, n):
      """Return the most recent n entries."""
@@ -27,5 +27,32 @@ index c83c2d8..401acfc 100644
 -    cur = db.execute(f"SELECT desc, amount FROM entries WHERE desc = '{desc}'")  # BUG: SQL injection
 +    cur = db.execute("SELECT desc, amount FROM entries WHERE desc = ?", (desc,))
      return cur.fetchall()
+ 
+ 
+ def is_within_budget(spent, limit):
+     """True if spending is at or under the limit."""
+-    return spent < limit  # BUG: wrong operator, spent == limit is still within budget
++    return spent <= limit
+ 
+ 
+-def add_entry(entry, ledger=[]):  # BUG: mutable default argument shared across calls
++def add_entry(entry, ledger=None):
+     """Append an entry to the ledger and return it."""
++    ledger = [] if ledger is None else ledger
+     ledger.append(entry)
+     return ledger
+ 
+ 
+ def split_bill(amount, people):
+     """Split a bill evenly between people, keeping the cents."""
+-    return amount // people  # BUG: integer division drops the fractional part
++    return amount / people
+ 
+ 
+ def page(entries, page_num, size):
+     """Return page `page_num` (1-based) of `size` entries."""
+-    start = page_num * size  # BUG: off-by-one, page 1 should start at index 0
++    start = (page_num - 1) * size
+     return entries[start:start + size]
  
  

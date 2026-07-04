@@ -43,6 +43,28 @@ def find_by_desc(db: sqlite3.Connection, desc: str):
     return cur.fetchall()
 
 
+def is_within_budget(spent, limit):
+    """True if spending is at or under the limit."""
+    return spent < limit  # BUG: wrong operator, spent == limit is still within budget
+
+
+def add_entry(entry, ledger=[]):  # BUG: mutable default argument shared across calls
+    """Append an entry to the ledger and return it."""
+    ledger.append(entry)
+    return ledger
+
+
+def split_bill(amount, people):
+    """Split a bill evenly between people, keeping the cents."""
+    return amount // people  # BUG: integer division drops the fractional part
+
+
+def page(entries, page_num, size):
+    """Return page `page_num` (1-based) of `size` entries."""
+    start = page_num * size  # BUG: off-by-one, page 1 should start at index 0
+    return entries[start:start + size]
+
+
 def init_db():
     db = sqlite3.connect(":memory:")
     db.execute("CREATE TABLE entries (desc TEXT, amount REAL)")
@@ -50,7 +72,8 @@ def init_db():
 '''
 
 TESTS = '''\
-from ledger import average, find_by_desc, init_db, last_n, total
+from ledger import (add_entry, average, find_by_desc, init_db, is_within_budget,
+                    last_n, page, split_bill, total)
 
 
 def test_total():
@@ -76,6 +99,26 @@ def test_find_by_desc_is_injection_safe():
     db.execute("INSERT INTO entries VALUES ('tea', 2.0)")
     assert find_by_desc(db, "coffee") == [("coffee", 3.5)]
     assert find_by_desc(db, "x' OR '1'='1") == []  # injection must not dump the table
+
+
+def test_is_within_budget_boundary():
+    assert is_within_budget(100, 100) is True  # spending exactly the limit is within budget
+
+
+def test_add_entry_does_not_share_state():
+    add_entry({"desc": "a", "amount": 1.0})
+    second = add_entry({"desc": "b", "amount": 2.0})
+    assert len(second) == 1  # each call must start from an empty ledger
+
+
+def test_split_bill_keeps_cents():
+    assert split_bill(10.0, 4) == 2.5
+
+
+def test_page_is_one_based():
+    entries = list(range(10))
+    assert page(entries, 1, 3) == [0, 1, 2]
+    assert page(entries, 2, 3) == [3, 4, 5]
 '''
 
 

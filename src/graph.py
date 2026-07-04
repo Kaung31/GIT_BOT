@@ -115,10 +115,10 @@ async def proposer(state: SwarmState) -> dict:
         prior = ("Previous round findings (fix these):\n"
                  + json.dumps(state["findings"]) + "\nArbitrator instructions: "
                  + state["verdict"].get("revise_instructions", ""))
-    out = await complete(settings.proposer_model,
-                         prompt("proposer", issue=_wrapped_issue(state), context=state["context"],
-                                prior_findings=prior),
-                         run_id=state["run_id"], json_mode=True)
+    system, user = prompt("proposer", issue=_wrapped_issue(state), context=state["context"],
+                          prior_findings=prior)
+    out = await complete(settings.proposer_model, system, user,
+                         run_id=state["run_id"], agent="proposer", json_mode=True)
     data = _json(out)
     patch = _edits_to_patch(state["repo"], data.get("edits", []))
     if not patch and isinstance(data.get("patch"), str):
@@ -134,22 +134,22 @@ async def proposer(state: SwarmState) -> dict:
 
 async def breaker(state: SwarmState) -> dict:
     test = await sandbox.run_tests(state["repo"], state.get("patch"))
-    out = await complete(settings.breaker_model,
-                         prompt("breaker", issue=_wrapped_issue(state),
-                                patch=state.get("patch") or "(no patch — review mode)",
-                                context=state["context"], test_result=json.dumps(test)),
-                         run_id=state["run_id"], json_mode=True)
+    system, user = prompt("breaker", issue=_wrapped_issue(state),
+                          patch=state.get("patch") or "(no patch — review mode)",
+                          context=state["context"], test_result=json.dumps(test))
+    out = await complete(settings.breaker_model, system, user,
+                         run_id=state["run_id"], agent="breaker", json_mode=True)
     findings = _json(out).get("findings", [])
     return {"test_result": test, "findings": findings}
 
 
 async def arbitrator(state: SwarmState) -> dict:
-    out = await complete(settings.arbitrator_model,
-                         prompt("arbitrator", issue=_wrapped_issue(state),
-                                patch=state.get("patch") or "(review mode)",
-                                findings=json.dumps(state["findings"]),
-                                test_result=json.dumps(state["test_result"])),
-                         run_id=state["run_id"], json_mode=True)
+    system, user = prompt("arbitrator", issue=_wrapped_issue(state),
+                          patch=state.get("patch") or "(review mode)",
+                          findings=json.dumps(state["findings"]),
+                          test_result=json.dumps(state["test_result"]))
+    out = await complete(settings.arbitrator_model, system, user,
+                         run_id=state["run_id"], agent="arbitrator", json_mode=True)
     v = _json(out)
     v.setdefault("decision", "reject")
     v.setdefault("confidence", 0.0)
