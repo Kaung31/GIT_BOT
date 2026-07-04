@@ -30,7 +30,7 @@ seed:  # create the demo repo with planted bugs (needs GITHUB_TOKEN + SEED_REPO=
 	uv run python -m scripts.seed_target_repo $(SEED_REPO)
 
 test:
-	uv run pytest -q
+	uv run --group dev pytest -q
 
 evals: up sandbox-image
 	uv run python -m evals.run_evals

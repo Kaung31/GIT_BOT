@@ -123,6 +123,8 @@ def test_page_is_one_based():
 
 
 async def main(github_repo: str | None) -> None:
+    if github_repo:  # accept a full URL or bare owner/name
+        github_repo = github_repo.removeprefix("https://github.com/").removesuffix(".git").strip("/")
     repo = github_repo or "local/swarm-demo"
     path = repo_path(repo)
     path.mkdir(parents=True, exist_ok=True)
