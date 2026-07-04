@@ -142,9 +142,11 @@ async def main(github_repo: str | None) -> None:
         owner, name = github_repo.split("/")
         async with httpx.AsyncClient(headers={"Authorization": f"Bearer {settings.github_token}",
                                               "Accept": "application/vnd.github+json"}) as c:
-            r = await c.post("https://api.github.com/user/repos",
-                             json={"name": name, "private": True})
-            if r.status_code not in (201, 422):  # 422 = already exists
+            # Only create if missing: fine-grained tokens 403 on /user/repos for an
+            # existing repo instead of the 422 a classic token returns.
+            if (await c.get(f"https://api.github.com/repos/{github_repo}")).status_code == 404:
+                r = await c.post("https://api.github.com/user/repos",
+                                 json={"name": name, "private": True})
                 r.raise_for_status()
             await _git(path, "push", "-u",
                        f"https://x-access-token:{settings.github_token}@github.com/{github_repo}.git",
