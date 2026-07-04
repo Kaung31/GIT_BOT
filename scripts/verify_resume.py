@@ -20,7 +20,7 @@ THREAD = "verify-resume-demo"
 PRE_APPROVED = {
     "mode": "issue", "repo": "local/swarm-demo", "run_id": THREAD,
     "issue": {"number": 1, "title": "fix the bug", "body": ""},
-    "context": "<<<code>>>", "revision_round": 0,
+    "context_chunks": [{"path": "x.py", "name": "f", "content": "code"}], "revision_round": 0,
     "patch": "diff --git a/x b/x", "rationale": "fixes it",
     "test_result": {"passed": True, "applied": True, "log": ""},
     "verdict": {"decision": "approve", "confidence": 0.9, "reasoning": "looks good"},

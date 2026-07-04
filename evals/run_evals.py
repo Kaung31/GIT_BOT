@@ -11,6 +11,7 @@ from pathlib import Path
 
 from langgraph.checkpoint.memory import MemorySaver
 
+from src.config import settings
 from src.graph import build_graph, run_config
 from src.ingestion import _git, embed_file
 from src.store import init_db
@@ -45,6 +46,9 @@ async def main() -> None:
     for f in (await _git(repo_path(REPO), "ls-files")).split():
         await embed_file(REPO, f)
 
+    # label results with the models used, so local vs Anthropic runs are never confused
+    print(f"\nmodels: proposer={settings.proposer_model} breaker={settings.breaker_model} "
+          f"arbitrator={settings.arbitrator_model}")
     results = [await eval_issue(g, i + 1) for i, g in enumerate(GOLDEN)]
     print(f"\n{'planted bug':<22} {'applies':>8} {'tests':>6} {'recall':>7} {'verdict':>8} {'rounds':>7}")
     for r in results:
@@ -54,6 +58,8 @@ async def main() -> None:
     print(f"\npatch-applies {sum(r['patch_applies'] for r in results)}/{n} · "
           f"tests-pass {sum(r['tests_pass'] for r in results)}/{n} · "
           f"breaker recall {sum(r['breaker_recall'] for r in results)}/{n}")
+    print(f"(models: proposer={settings.proposer_model}, breaker={settings.breaker_model}, "
+          f"arbitrator={settings.arbitrator_model})")
     # ponytail: stdout report — push to Langfuse datasets when you want CI history
 
 

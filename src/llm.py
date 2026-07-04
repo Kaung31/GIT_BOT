@@ -22,13 +22,41 @@ log = logging.getLogger(__name__)
 PROMPTS = Path(__file__).parent / "prompts"
 CACHE_SPLIT = "===VARIABLE==="
 
+# Anthropic silently skips prompt caching if the cached prefix is below a per-model minimum.
+CACHE_MINIMUMS = {"claude-sonnet-4-6": 1024, "claude-haiku-4-5": 4096}
+DEFAULT_ANTHROPIC_MIN = 1024
+
 if settings.langfuse_public_key:
     os.environ.setdefault("LANGFUSE_PUBLIC_KEY", settings.langfuse_public_key)
     os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key)
     os.environ.setdefault("LANGFUSE_HOST", settings.langfuse_host)
     litellm.success_callback = ["langfuse"]
 
+if settings.anthropic_api_key:  # so a key in .env actually reaches litellm
+    os.environ.setdefault("ANTHROPIC_API_KEY", settings.anthropic_api_key)
+
 _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+_cache_warned: set = set()
+
+
+def estimate_tokens(text: str) -> int:
+    """Cheap offline estimate (~4 chars/token, word-count floor). Enough to gate on the
+    caching minimum without an API round-trip."""
+    return max(len(text) // 4, len(text.split()))
+
+
+def caching_minimum(model: str) -> int | None:
+    """Min cached-prefix tokens for this model to cache at all; None for non-Anthropic (no cache)."""
+    if not model.startswith("anthropic/"):
+        return None
+    name = model.split("/", 1)[1]
+    return next((m for k, m in CACHE_MINIMUMS.items() if k in name), DEFAULT_ANTHROPIC_MIN)
+
+
+def prefix_caches(model: str, system: str) -> bool | None:
+    """True/False whether the stable prefix clears the model's cache minimum; None if N/A (local)."""
+    minimum = caching_minimum(model)
+    return None if minimum is None else estimate_tokens(system) >= minimum
 
 
 class BudgetExceeded(Exception):
@@ -91,9 +119,18 @@ async def embed(texts: list[str]) -> list[list[float]]:
     return [d["embedding"] for d in resp.data]
 
 
+def _warn_if_prefix_too_small(model: str, system: str, agent: str) -> None:
+    if prefix_caches(model, system) is False and (agent, model) not in _cache_warned:
+        _cache_warned.add((agent, model))
+        log.warning("prompt caching DISABLED for %s: stable prefix ~%d tok < %d min for %s — "
+                    "raise %s_CONTEXT_CHUNKS to cache", agent, estimate_tokens(system),
+                    caching_minimum(model), model, agent.upper())
+
+
 async def complete(model: str, system: str, user: str, *, run_id: str, agent: str = "",
                    cache: bool = False, json_mode: bool = False) -> str:
     await _check_budget(run_id)
+    _warn_if_prefix_too_small(model, system, agent)
 
     query_emb = None
     if cache:

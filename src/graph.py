@@ -26,7 +26,7 @@ class SwarmState(TypedDict, total=False):
     repo: str
     run_id: str                                 # budget key = graph thread_id
     issue: dict                                 # number, title, body (also used for PR meta)
-    context: str                                # RAG-retrieved code, wrapped as untrusted
+    context_chunks: list[dict]                  # RAG-retrieved code, sliced per-agent at call time
     patch: str | None                           # unified diff (overwritten per revision)
     rationale: str | None
     findings: Annotated[list[dict], add]        # APPEND-ONLY across revise rounds
@@ -54,8 +54,15 @@ def _wrapped_issue(state: SwarmState) -> str:
     return wrap_untrusted("ISSUE", f"#{i['number']} {i['title']}\n\n{i.get('body') or ''}")
 
 
+def _context(state: SwarmState, n: int) -> str:
+    """Format the top-n retrieved chunks for one agent. More chunks = larger cacheable prefix."""
+    chunks = (state.get("context_chunks") or [])[:n]
+    body = "\n\n".join(f"# {c['path']} :: {c['name']}\n{c['content']}" for c in chunks)
+    return wrap_untrusted("REPO_CODE", body or "(no indexed code found)")
+
+
 def supervisor(state: SwarmState) -> Command:
-    if not state.get("context"):
+    if state.get("context_chunks") is None:
         return Command(goto="retrieve")
     v = state.get("verdict")
     if v:
@@ -75,9 +82,10 @@ def supervisor(state: SwarmState) -> Command:
 async def retrieve(state: SwarmState) -> dict:
     i = state["issue"]
     vec = (await embed([f"{i['title']}\n{i.get('body') or ''}"]))[0]
-    chunks = await store.similar_chunks(vec, state["repo"])
-    ctx = "\n\n".join(f"# {c.path} :: {c.name}\n{c.content}" for c in chunks)
-    return {"context": wrap_untrusted("REPO_CODE", ctx or "(no indexed code found)"),
+    limit = max(settings.proposer_context_chunks, settings.breaker_context_chunks,
+                settings.arbitrator_context_chunks)
+    chunks = await store.similar_chunks(vec, state["repo"], limit=limit)
+    return {"context_chunks": [{"path": c.path, "name": c.name, "content": c.content} for c in chunks],
             "revision_round": state.get("revision_round", 0)}
 
 
@@ -115,7 +123,8 @@ async def proposer(state: SwarmState) -> dict:
         prior = ("Previous round findings (fix these):\n"
                  + json.dumps(state["findings"]) + "\nArbitrator instructions: "
                  + state["verdict"].get("revise_instructions", ""))
-    system, user = prompt("proposer", issue=_wrapped_issue(state), context=state["context"],
+    system, user = prompt("proposer", issue=_wrapped_issue(state),
+                          context=_context(state, settings.proposer_context_chunks),
                           prior_findings=prior)
     out = await complete(settings.proposer_model, system, user,
                          run_id=state["run_id"], agent="proposer", json_mode=True)
@@ -136,7 +145,8 @@ async def breaker(state: SwarmState) -> dict:
     test = await sandbox.run_tests(state["repo"], state.get("patch"))
     system, user = prompt("breaker", issue=_wrapped_issue(state),
                           patch=state.get("patch") or "(no patch — review mode)",
-                          context=state["context"], test_result=json.dumps(test))
+                          context=_context(state, settings.breaker_context_chunks),
+                          test_result=json.dumps(test))
     out = await complete(settings.breaker_model, system, user,
                          run_id=state["run_id"], agent="breaker", json_mode=True)
     findings = _json(out).get("findings", [])
@@ -145,6 +155,7 @@ async def breaker(state: SwarmState) -> dict:
 
 async def arbitrator(state: SwarmState) -> dict:
     system, user = prompt("arbitrator", issue=_wrapped_issue(state),
+                          context=_context(state, settings.arbitrator_context_chunks),
                           patch=state.get("patch") or "(review mode)",
                           findings=json.dumps(state["findings"]),
                           test_result=json.dumps(state["test_result"]))

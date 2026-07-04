@@ -1,4 +1,4 @@
-.PHONY: dev up test evals seed sandbox-image tunnel langfuse verify-resume
+.PHONY: dev up test evals seed sandbox-image tunnel langfuse verify-resume verify-caching recommend-models
 
 up:
 	docker compose up -d
@@ -10,6 +10,12 @@ langfuse: up  # self-hosted tracing on http://localhost:3000 (first run creates 
 
 verify-resume: up  # prove the checkpoint survives a process restart (no LLM/GitHub needed)
 	uv run python -m scripts.verify_resume
+
+verify-caching: up  # confirm Haiku prompt caching engages (needs ANTHROPIC_API_KEY, ~$0.10)
+	uv run python -m scripts.verify_caching
+
+recommend-models:  # print the Ollama model tier for this machine's memory
+	uv run python -m scripts.recommend_models
 
 sandbox-image:
 	docker build -f Dockerfile.sandbox -t swarm-sandbox .

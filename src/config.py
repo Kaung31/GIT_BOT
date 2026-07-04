@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     embed_model: str = "ollama/nomic-embed-text"
     embed_dim: int = 768
     ollama_api_base: str = "http://localhost:11434"
+    anthropic_api_key: str = ""        # exported to env in llm.py so litellm picks it up
+
+    # Per-agent RAG context size. Bigger = better context AND a larger cacheable prefix.
+    # Anthropic skips caching below a per-model minimum (1024 tok Sonnet, 4096 tok Haiku),
+    # so the Haiku agents (breaker/arbitrator) get more chunks to clear it. See llm.caching_minimum.
+    proposer_context_chunks: int = 8
+    breaker_context_chunks: int = 12
+    arbitrator_context_chunks: int = 12
 
     database_url: str = "postgresql+asyncpg://swarm:swarm@localhost:5432/swarm"
     redis_url: str = "redis://localhost:6379/0"

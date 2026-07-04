@@ -25,13 +25,17 @@ Telegram**. Local-first (Ollama), with a small Anthropic budget reserved for dem
 
 ```bash
 cp .env.example .env             # fill in as you complete setup below
+uv run python -m scripts.recommend_models   # prints the model tier for your hardware
+# default tier (16–24GB): pull these three
 ollama pull qwen2.5-coder:14b && ollama pull qwen3:14b && ollama pull nomic-embed-text
+# big tier (32GB Mac / 24GB+ VRAM) instead of the coder:14b above:
+#   ollama pull qwen3-coder:30b   # then set PROPOSER_MODEL=ollama/qwen3-coder:30b in .env
 make up                          # postgres+pgvector, redis
 make sandbox-image               # the container the Breaker runs tests in
 uv sync
-make test                        # 8 offline tests, no services needed
-make seed                        # local demo repo with 4 planted bugs
-make evals                       # patch-applies / tests-pass / breaker-recall on the golden set
+make test                        # 11 offline tests, no services needed
+make seed                        # local demo repo with 8 planted bugs
+make evals                       # patch-applies / tests-pass / breaker-recall (labeled with models)
 make dev                         # FastAPI on :8000 (webhook + worker + telegram poller)
 make tunnel                      # ngrok for the GitHub webhook
 ```
@@ -43,6 +47,19 @@ make tunnel                      # ngrok for the GitHub webhook
 | Label an issue `swarm-fix` | Full swarm writes a patch → sandbox-tested → verdict → Telegram Approve → real PR opens |
 | Open a PR | Breaker + Arbitrator review it (cheap mode) → Telegram Approve → review comment posted |
 
+## What's left (your side) — in order
+
+The code is built and tested; these are the manual steps, and **order matters** — verify caching
+before you spend on a paid eval:
+
+1. **Pick models for your hardware** — `uv run python -m scripts.recommend_models`, pull them.
+2. **Telegram** bot token + chat id ([step 1](#1-telegram-bot-2-minutes)).
+3. **GitHub** fine-grained PAT (with expiry) + webhook + `swarm-fix` label ([step 2](#2-github-app-side-5-minutes)).
+4. **Langfuse** — `make langfuse`, paste keys, do a run, screenshot the trace tree.
+5. **Verify caching** — add `ANTHROPIC_API_KEY`, run `scripts/verify_caching.py` (~$0.10). **Do this before step 6.**
+6. **Paid eval run** — flip models to Anthropic, `make evals` (results are labeled with the model names).
+7. **Rehearse the restart-resume demo** ([below](#restart-resume-demo-rehearse-last)).
+
 ## Step-by-step setup
 
 ### 1. Telegram bot (2 minutes)
@@ -52,9 +69,10 @@ make tunnel                      # ngrok for the GitHub webhook
    `TELEGRAM_CHAT_ID`. Only this chat can approve; button taps from anyone else are ignored.
 
 ### 2. GitHub app-side (5 minutes)
-1. Fine-grained PAT: github.com → Settings → Developer settings → Fine-grained tokens →
-   scope it to **only** your target repos with Read+Write on **Contents, Pull requests,
-   Issues** → `GITHUB_TOKEN`.
+1. **Fine-grained PAT** (never a classic full-scope token): github.com → Settings → Developer
+   settings → Fine-grained tokens. Scope it to **only your demo repos**, with **Read+Write on
+   Contents, Pull requests, and Issues** (nothing else), and **set an expiry date** (e.g. 90 days
+   — don't pick "no expiration"). → `GITHUB_TOKEN`.
 2. Per target repo: Settings → Webhooks → Add webhook →
    Payload URL `https://<your-ngrok-domain>/webhooks/github`, content type `application/json`,
    a secret you invent (→ `GITHUB_WEBHOOK_SECRET`), events: **Issues, Pull requests, Pushes**.
@@ -104,18 +122,24 @@ The code side of all of these is done and tested. Here's the manual half:
    and showing per-call tokens and cost. The gateway already emits this metadata — screenshot the
    trace tree; that's your "exact cost of every run" README figure.
 
-### Prompt caching (verify before spending on Sonnet)
-Prompts are already split into a stable prefix (role + rules + repo context + issue) and a
-variable suffix (patch/findings/test), and for `anthropic/*` models the stable prefix carries
-`cache_control`. To confirm it's live:
-1. Set the three models to `anthropic/claude-haiku-4-5` in `.env`, add `ANTHROPIC_API_KEY`.
-2. Run the same issue twice within 5 minutes (Anthropic's cache TTL). Watch the app logs — each
-   LLM call logs `cache_read=… cache_write=…`. First run: `cache_write` > 0. Second run:
-   `cache_read` > 0. That's caching working (~$0.20 total for the test).
-3. **Caveat:** Anthropic only caches prefixes above a minimum size (~2048 tokens for Haiku). The
-   tiny demo repo may fall under that, so `cache_read` can read 0 — test against a real repo with
-   more context, or just confirm the mechanism on a larger issue. If it's 0 on a big repo, the
-   `cache_control` wiring is broken; if it's 0 only on the toy repo, that's expected.
+### Prompt caching (verify before spending)
+Prompts are split into a stable prefix (role + rules + repo context + issue) and a variable suffix
+(patch/findings/test); for `anthropic/*` models the stable prefix carries `cache_control`.
+**Anthropic silently skips caching below a per-model minimum: 1,024 tokens for Sonnet but 4,096
+for Haiku.** The Breaker/Arbitrator run on Haiku, so they retrieve more context chunks
+(`BREAKER/ARBITRATOR_CONTEXT_CHUNKS=12`) to clear it, and the gateway logs a `caching DISABLED`
+warning per agent whenever a real prefix still falls short.
+
+To confirm caching is actually engaging **before any paid run**:
+1. Add `ANTHROPIC_API_KEY` to `.env`.
+2. `uv run python -m scripts.verify_caching` — makes two identical cheap Haiku calls (~$0.10,
+   refuses to run without the key, respects the daily spend cap) and prints
+   `cache_creation_input_tokens` / `cache_read_input_tokens` for each. It exits non-zero if the
+   second call didn't read from cache.
+3. **Caveat:** the tiny demo repo's context is well under 4,096 tokens, so caching legitimately
+   won't engage on it — `verify_caching.py` uses a large synthetic prefix to test the mechanism,
+   and real target repos with 12 real-function chunks clear the minimum. If it's 0 on a big repo,
+   the wiring is broken; 0 on the toy repo is expected.
 
 ### Restart-resume demo (rehearse last)
 - `make verify-resume` proves the checkpoint survives a process restart automatically (no LLM,
