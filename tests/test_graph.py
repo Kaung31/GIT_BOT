@@ -47,7 +47,7 @@ def _mock_llm(monkeypatch, verdicts: list[str], tests_pass: bool = True):
         return json.dumps({"decision": verdicts.pop(0), "confidence": 0.8,
                            "reasoning": "because", "revise_instructions": "handle it"})
     monkeypatch.setattr(g, "complete", fake_complete)
-    async def fake_tests(repo, patch):
+    async def fake_tests(repo, patch, test_filter=None):
         return {"passed": tests_pass, "applied": True, "log": ""}
     monkeypatch.setattr(g.sandbox, "run_tests", fake_tests)
 

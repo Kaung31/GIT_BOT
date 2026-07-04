@@ -141,8 +141,17 @@ async def proposer(state: SwarmState) -> dict:
             "test_result": None, "verdict": None}
 
 
+def _target_test(state: SwarmState) -> str | None:
+    """Scope the sandbox to this issue's test (leading function name in the title) so the demo
+    repo's other planted bugs — whose tests always fail — don't block an otherwise-good patch."""
+    if state.get("mode") != "issue":
+        return None
+    m = re.match(r"[a-z_][a-z0-9_]*", (state.get("issue", {}).get("title") or "").strip())
+    return m.group(0) if m else None
+
+
 async def breaker(state: SwarmState) -> dict:
-    test = await sandbox.run_tests(state["repo"], state.get("patch"))
+    test = await sandbox.run_tests(state["repo"], state.get("patch"), _target_test(state))
     system, user = prompt("breaker", issue=_wrapped_issue(state),
                           patch=state.get("patch") or "(no patch — review mode)",
                           context=_context(state, settings.breaker_context_chunks),

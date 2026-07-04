@@ -2,7 +2,7 @@
 import datetime as dt
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, String, Text, delete, select, text
+from sqlalchemy import DateTime, String, Text, delete, func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -40,6 +40,11 @@ async def init_db() -> None:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
     # ponytail: create_all instead of alembic — add migrations when the schema changes in prod
+
+
+async def repo_chunk_count(repo: str) -> int:
+    async with Session() as s:
+        return await s.scalar(select(func.count()).select_from(CodeChunk).where(CodeChunk.repo == repo)) or 0
 
 
 async def replace_file_chunks(repo: str, path: str, chunks: list[CodeChunk]) -> None:

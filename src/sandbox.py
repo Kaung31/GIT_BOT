@@ -14,8 +14,9 @@ from src.ingestion import _git, repo_path
 log = logging.getLogger(__name__)
 
 
-async def run_tests(repo: str, patch: str | None) -> dict:
-    """Returns {"passed": bool, "log": str, "applied": bool}."""
+async def run_tests(repo: str, patch: str | None, test_filter: str | None = None) -> dict:
+    """Returns {"passed": bool, "log": str, "applied": bool}. test_filter (pytest -k) scopes to
+    the labeled issue's test — the demo repo has other planted bugs whose tests always fail."""
     workdir = Path(tempfile.mkdtemp(prefix="swarm-sandbox-"))
     name = f"swarm-{uuid.uuid4().hex[:8]}"
     try:
@@ -33,6 +34,7 @@ async def run_tests(repo: str, patch: str | None) -> dict:
             "--network=none", f"--memory={settings.sandbox_memory_mb}m", "--cpus=2",
             "-v", f"{workdir / 'repo'}:/work", "-w", "/work",
             settings.sandbox_image, "python", "-m", "pytest", "-x", "-q", "--no-header",
+            *(["-k", test_filter] if test_filter else []),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), settings.sandbox_timeout_s)

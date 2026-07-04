@@ -10,11 +10,14 @@ import redis.asyncio as aioredis
 
 from src.config import settings
 from src.llm import embed
-from src.store import CodeChunk, replace_file_chunks
+from src.store import CodeChunk, replace_file_chunks, repo_chunk_count
 
 log = logging.getLogger(__name__)
 STREAM, GROUP = "github:events", "ingest"
-_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+# socket_timeout must exceed the XREADGROUP block window (5s) or idle blocking polls
+# race the client read-timeout and raise TimeoutError; keepalive detects dead sockets.
+_redis = aioredis.from_url(settings.redis_url, decode_responses=True,
+                           socket_timeout=60, socket_keepalive=True, health_check_interval=30)
 
 CODE_EXTS = {".py", ".js", ".ts", ".go", ".rs", ".java", ".rb", ".md", ".toml", ".yaml", ".yml"}
 
@@ -76,10 +79,18 @@ async def sync_repo(repo: str, full: bool = False) -> None:
         await _git(path.parent, "clone", url, path.name)
         full = True
     else:
+        # seed-created mirrors have no remote; open_pr needs origin to fetch/branch/push.
+        url = f"https://x-access-token:{settings.github_token}@github.com/{repo}.git"
+        try:
+            await _git(path, "remote", "set-url", "origin", url)
+        except RuntimeError:
+            await _git(path, "remote", "add", "origin", url)
         old = (await _git(path, "rev-parse", "HEAD")).strip()
         await _git(path, "pull", "--ff-only")
         new = (await _git(path, "rev-parse", "HEAD")).strip()
         changed = (await _git(path, "diff", "--name-only", old, new)).split() if old != new else []
+        if not full and await repo_chunk_count(repo) == 0:
+            full = True  # mirror exists (e.g. pre-created by seed) but was never embedded
         if not full:
             for f in changed:
                 await embed_file(repo, f)
@@ -99,7 +110,12 @@ async def run_worker(on_trigger) -> None:
         pass  # group exists
     log.info("ingestion worker started")
     while True:
-        batches = await _redis.xreadgroup(GROUP, "worker-1", {STREAM: ">"}, count=5, block=5000)
+        try:
+            batches = await _redis.xreadgroup(GROUP, "worker-1", {STREAM: ">"}, count=5, block=5000)
+        except Exception:  # a transient redis blip must not kill the loop for good
+            log.exception("xreadgroup failed; retrying in 1s")
+            await asyncio.sleep(1)
+            continue
         for _, entries in batches or []:
             for entry_id, fields in entries:
                 try:
