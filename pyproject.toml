@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2.7",
     "httpx>=0.28",                        # GitHub REST + Telegram Bot API
     "psycopg[binary]>=3.2",               # checkpointer needs sync psycopg
+    "langfuse>=2.53,<3",                  # litellm success_callback target
 ]
 
 [dependency-groups]
