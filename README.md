@@ -1,177 +1,155 @@
 # Code-Review Swarm
 
-Adversarial multi-agent code review: a **Proposer** writes a patch for a labeled GitHub issue,
-a **Breaker** attacks it (including running the repo's tests against it in a locked-down
-sandbox), an **Arbitrator** judges — and nothing touches GitHub until **you tap Approve on
-Telegram**. Local-first (Ollama), with a small Anthropic budget reserved for demo day.
+Label a GitHub issue and three LLM agents write a patch, attack it, run the repo's real tests against it in a sandbox, and hand you a verdict on Telegram — nothing merges until you tap Approve.
 
-## Architecture
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 
-- **Ingestion plane** — GitHub webhooks → Redis Stream → async worker → local repo mirror +
-  AST-chunked embeddings in Postgres/pgvector. Agents only read the local mirror mid-run.
-- **Agent plane** — supervised LangGraph: `proposer → breaker → arbitrator`, revise loop capped
-  at `MAX_REVISION_ROUNDS`, append-only findings across rounds, Postgres checkpointer so an
-  approval pause **survives a restart**. The Breaker never sees the Proposer's rationale —
-  information isolation keeps the adversarial setup honest.
-- **Sandbox** — patches are untrusted code: applied to a throwaway copy and tested in a
-  container with `--network=none`, a memory cap, and a hard timeout. **Failing tests can never
-  be approved** — enforced in code, not just in the prompt.
-- **Guardrails** — per-run token buckets, a hard **daily USD spend cap** (protects the £4.90),
-  semantic cache, recursion ceiling, prompt-injection flagging on all GitHub-sourced text.
-- **Model routing** — per-agent via litellm: develop everything on Ollama; flip three env vars
-  on demo day (Sonnet writes, Haiku critiques). Optional Langfuse tracing via env keys.
+<!-- TODO: record a GIF of the full loop — label an issue, the Telegram verdict card arriving, tapping Approve, and the PR opening on GitHub. This is the whole pitch in 15 seconds. -->
 
-## Quick start
+## Overview
 
-```bash
-cp .env.example .env             # fill in as you complete setup below
-uv run python -m scripts.recommend_models   # prints the model tier for your hardware
-# default tier (16–24GB): pull these three
-ollama pull qwen2.5-coder:14b && ollama pull qwen3:14b && ollama pull nomic-embed-text
-# big tier (32GB Mac / 24GB+ VRAM) instead of the coder:14b above:
-#   ollama pull qwen3-coder:30b   # then set PROPOSER_MODEL=ollama/qwen3-coder:30b in .env
-make up                          # postgres+pgvector, redis
-make sandbox-image               # the container the Breaker runs tests in
-uv sync
-make test                        # 11 offline tests, no services needed
-make seed                        # local demo repo with 8 planted bugs
-make evals                       # patch-applies / tests-pass / breaker-recall (labeled with models)
-make dev                         # FastAPI on :8000 (webhook + worker + telegram poller)
-make tunnel                      # ngrok for the GitHub webhook
-```
+Fixing a small bug still means writing the patch, checking it doesn't break anything, and reviewing it — three steps, one person. This project splits those into three adversarial agents (Proposer, Breaker, Arbitrator) that argue over a fix before you ever see it, and backs the Breaker's opinion with an actual test run in an isolated Docker container instead of just an LLM's word. It's built for one person watching one or two repos, not a team tool — the whole point is a human still approves every write, just once, at the end, from their phone.
 
-## The two modes
+## Features
 
-| Trigger | What happens |
+- Label an issue `swarm-fix` and get back a real pull request — written, sandbox-tested, and reviewed before you see it
+- Every patch is tested for real: the Breaker applies it in a `--network=none` Docker container and runs the repo's actual test suite
+- A failing test can never be approved — that's enforced in code, not just requested in a prompt
+- Nothing reaches GitHub without a tap on a Telegram Approve/Reject button, even if an agent gets talked into something bad
+- Survives a restart mid-review — the approval pause is checkpointed to Postgres, not held in a Python variable
+- Runs free during development on local Ollama models; flip three env vars to route through Claude for a paid demo run
+- A hard daily USD spend cap is checked before every single LLM call, using the real per-call cost from the provider
+- Also reviews plain pull requests (not just labeled issues) with the same Breaker + Arbitrator pass, no Proposer involved
+
+## Tech Stack
+
+| Tech | Used for |
 |---|---|
-| Label an issue `swarm-fix` | Full swarm writes a patch → sandbox-tested → verdict → Telegram Approve → real PR opens |
-| Open a PR | Breaker + Arbitrator review it (cheap mode) → Telegram Approve → review comment posted |
+| FastAPI + uvicorn | Webhook receiver + background task host |
+| LangGraph + langgraph-checkpoint-postgres | Agent state machine, checkpointed human-approval pause |
+| litellm | One call signature across Ollama and Anthropic |
+| Postgres + pgvector | Code-chunk embeddings, RAG retrieval, LangGraph checkpoints |
+| SQLAlchemy (async) + asyncpg | ORM and DB driver for the above |
+| Redis | Event queue (Streams), webhook dedup, spend/token counters |
+| Docker | Isolated, network-off sandbox for running a repo's tests |
+| httpx | GitHub REST API and Telegram Bot API calls |
+| Langfuse (optional) | Per-agent LLM call tracing |
+| pytest + pytest-asyncio | 11 offline unit tests |
+| uv | Dependency management |
 
-## Full runbook: zero → demo done
+## Getting Started
 
-Follow top to bottom. **You never point this at your real projects.** The target is a *throwaway
-demo repo* the seed script creates for you — and even then the bot only ever opens a PR you can
-close. Everything through Phase 5 is **free** (Ollama); only Phase 6 spends the Anthropic budget.
+### Prerequisites
 
-### Phase 0 — local setup (once, ~10 min)
+- Python 3.12 (pinned in `pyproject.toml`, not 3.13)
+- [uv](https://github.com/astral-sh/uv)
+- Docker
+- [Ollama](https://ollama.com), running locally
+
+### Installation
+
 ```bash
 cp .env.example .env
-uv run python -m scripts.recommend_models     # prints your model tier; pull what it lists:
+uv run python -m scripts.recommend_models   # tells you which models fit your machine
 ollama pull qwen2.5-coder:14b && ollama pull qwen3:14b && ollama pull nomic-embed-text
-make up            # postgres + redis
-make sandbox-image # the container the Breaker runs tests in
+make up                                     # postgres+pgvector, redis
+make sandbox-image                          # the container the Breaker runs tests in
 uv sync
-make test          # must print "11 passed"
+make test                                   # should print 11 passed, no services needed
 ```
 
-### Phase 1 — Telegram (~2 min)
-1. Message **@BotFather** → `/newbot` → name it → copy the token → `TELEGRAM_BOT_TOKEN` in `.env`.
-2. DM your new bot any message, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a
-   browser → copy the numeric `chat.id` from the JSON → `TELEGRAM_CHAT_ID`. Only that id can approve.
+### Environment variables
 
-### Phase 2 — GitHub token (~3 min)
-Fine-grained PAT (never a classic token): github.com → Settings → Developer settings →
-Fine-grained tokens → **only the demo repo you'll make next**, **Read+Write on Contents +
-Pull requests + Issues** (nothing else), **set a 90-day expiry** → `GITHUB_TOKEN` in `.env`.
+Everything lives in [`.env.example`](.env.example). The ones you actually have to fill in:
 
-### Phase 3 — create the throwaway test repo (~3 min)
-This is the "don't touch your real projects" step. `make seed` creates a **brand-new private repo**
-full of planted bugs — it is not your real code:
+| Variable | What it's for | Where to get it |
+|---|---|---|
+| `GITHUB_TOKEN` | Fine-grained PAT — Contents + Pull requests + Issues write, scoped to your target repo(s) | github.com → Settings → Developer settings → Fine-grained tokens |
+| `GITHUB_WEBHOOK_SECRET` | HMAC secret to verify inbound GitHub webhooks | invent one yourself |
+| `TARGET_REPOS` | Comma-separated `owner/name` list to watch | your own repo(s) |
+| `TELEGRAM_BOT_TOKEN` | Bot credential for sending/receiving approval messages | message @BotFather → `/newbot` |
+| `TELEGRAM_CHAT_ID` | The only chat id allowed to approve a patch | DM your bot once, then check `api.telegram.org/bot<TOKEN>/getUpdates` |
+| `ANTHROPIC_API_KEY` | Paid demo-day models only — leave blank to stay on free Ollama | console.anthropic.com |
+| `PROPOSER_MODEL` / `BREAKER_MODEL` / `ARBITRATOR_MODEL` | litellm model string per agent | defaults to `ollama/...`, see `.env.example` |
+| `DATABASE_URL` / `REDIS_URL` | Connection strings | defaults match `make up` |
+| `DAILY_SPEND_CAP_USD` | Hard USD ceiling checked before every LLM call | default `1.50` |
+
+### Run it
+
 ```bash
-make seed SEED_REPO=you/swarm-demo   # creates the repo on GitHub, pushes, files 8 bug issues
+make dev      # FastAPI + ingestion worker + Telegram poller on :8000
+make tunnel   # in a second terminal — ngrok, so GitHub can reach your webhook
 ```
-Then wire it up:
-1. `.env`: set `TARGET_REPOS=you/swarm-demo` and invent a `GITHUB_WEBHOOK_SECRET`.
-2. `make tunnel` (leave running) → copy the `https://…ngrok…` URL.
-3. On GitHub → the **swarm-demo** repo → Settings → Webhooks → Add webhook:
-   Payload URL `https://<ngrok>/webhooks/github`, content type `application/json`,
-   Secret = your `GITHUB_WEBHOOK_SECRET`, events: **Issues, Pull requests, Pushes**.
-4. In that repo, Issues → Labels → create `swarm-fix`.
 
-### Phase 4 — first live run, FREE on Ollama (~5 min)
-```bash
-make dev           # keep `make tunnel` running in another terminal
+Point a GitHub webhook at `https://<ngrok-url>/webhooks/github` (content type `application/json`, events: Issues, Pull requests, Pushes), create a `swarm-fix` label on the repo, and label an issue.
+
+## Usage
+
+**Fix an issue.** Label it `swarm-fix`. A Telegram message arrives:
+
 ```
-1. On GitHub, open the **swarm-demo** repo → Issues → pick one → add the **`swarm-fix`** label.
-2. Telegram pings "🐝 swarm run started", then a verdict card: diff, findings, confidence,
-   **[✅ Approve] [❌ Reject]**.
-3. Tap **Approve** → a PR opens on swarm-demo. Open it, look, then **Close it** (don't merge —
-   nothing here needs shipping). Full loop proven, **$0 spent**.
-4. Try **PR-review mode** too: open any PR on swarm-demo → the bot posts an adversarial review →
-   Approve → it comments on the PR. Close the PR.
-
-### Phase 5 — Langfuse trace + local eval numbers (~10 min) — your CV figures
-```bash
-make langfuse      # http://localhost:3000 → sign up → new project → keys into .env → restart `make dev`
+🐝 swarm run started: you/demo-repo#4 (issue)
 ```
-- Do one run → Langfuse → Traces → screenshot the `swarm-run` tree (per-agent tokens + cost). **Figure 1.**
-```bash
-make evals         # 8 planted bugs, labeled with the model names
+
+...followed a bit later by a verdict card, diff included, with inline **Approve** / **Reject** buttons:
+
 ```
-- Screenshot the results table — your **local** patch-applies / tests-pass / breaker-recall. **Figure 2.**
+🤖 Swarm verdict: approve (confidence 0.8)
+The patch fixes the reported crash and doesn't touch unrelated code.
 
-### Phase 6 — the paid demo-day run (spends the £4.90) — do these IN ORDER
-1. Add `ANTHROPIC_API_KEY` to `.env`.
-2. **Verify caching FIRST:** `make verify-caching` (~$0.10). It must print `cache_read > 0` on call 2.
-   (If it doesn't, fix it before spending more — see the reference section below.)
-3. Flip models in `.env`: `PROPOSER_MODEL=anthropic/claude-sonnet-4-6`,
-   `BREAKER_MODEL` and `ARBITRATOR_MODEL` = `anthropic/claude-haiku-4-5`.
-4. `make evals` → screenshot the **Anthropic** numbers beside your local ones. **Figure 3.**
-5. Do 2–3 live labeled-issue runs for the recording. `DAILY_SPEND_CAP_USD=1.50` halts any runaway.
+✅ tests pass
 
-### Phase 7 — the showpiece: restart survives a restart (record this)
-`make verify-resume` proves it headless anytime (green, no LLM/GitHub). For the live take:
-label an issue → wait for the Telegram card → `docker compose down` → wait 10s →
-`docker compose up -d && make dev` → tap **Approve** → the PR still opens. Screen-record it.
+Findings (1):
+• [minor] no test for the empty-list case
 
-### Phase 8 — done + cleanup
-- Delete or archive the **swarm-demo** repo — it's disposable.
-- Your PAT expires on its own; revoke it early if you like.
-- Keep the four artifacts (Langfuse trace, local eval table, Anthropic eval table, restart recording).
-  **That's your portfolio — the demo is done.**
+diff --git a/ledger.py b/ledger.py
+...
+```
 
-### Optional: one "real code" data point without touching a finished project
-Want to show it on real code? **Copy/fork one finished project into a new repo** (e.g.
-`you/swarm-test-myproject`), point `TARGET_REPOS` at the *copy*, and use PR-review mode: open a
-throwaway PR there, let the bot review it, close it. Your original repo is never touched.
+Tap **Approve** and a real PR opens on the repo. Tap **Reject** and nothing is written anywhere.
 
-## Budget guardrails for the £4.90
+**Review a PR.** Open any pull request on a watched repo — no label needed. The same Breaker + Arbitrator pass runs against the PR's actual diff, and on approval posts a review comment instead of opening a new PR.
 
-Development never touches the paid API — the default models are all `ollama/…`. On demo day set
-`PROPOSER_MODEL=anthropic/claude-sonnet-4-6`, `BREAKER_MODEL=ARBITRATOR_MODEL=anthropic/claude-haiku-4-5`.
-`DAILY_SPEND_CAP_USD` (default $1.50) is enforced before every LLM call from litellm's real
-per-response cost — a runaway loop stops itself the same day it starts. Per-run token buckets
-and the graph recursion ceiling back that up.
+**Check it without spending anything.** `make seed SEED_REPO=you/swarm-demo` creates a throwaway repo with 8 planted bugs, and `make evals` runs the swarm against all 8 and prints patch-applies / tests-pass / breaker-recall rates.
 
-## Evals
+## Project Structure
 
-`make evals` replays the 8 seeded issues (off-by-one slice, None-handling, empty-list edge case,
-SQL injection, wrong comparison operator, mutable default argument, integer-division money bug,
-off-by-one pagination) through the swarm against the local mirror and reports **patch-applies %,
-tests-pass %, breaker recall** on the planted bugs, plus verdicts and revise rounds.
-`evals/known_good.patch` is the reference fix for all 8 — the sandbox goes green with it applied
-(verified), so a perfect proposer scores 8/8.
+```
+src/
+├── app.py           # FastAPI entrypoint: webhook route + background workers
+├── graph.py         # The LangGraph state machine — supervisor, agents, revise loop
+├── llm.py           # litellm calls, budget cap, prompt caching
+├── ingestion.py     # GitHub → Redis Stream → local git mirror + embeddings
+├── sandbox.py       # Runs a repo's tests against a patch in an isolated container
+├── github_io.py     # Open PRs, post reviews, fetch diffs
+├── telegram_io.py   # Verdict cards, Approve/Reject buttons, long-polling
+├── security.py      # Prompt-injection flagging, untrusted-text wrapping
+├── store.py         # SQLAlchemy models + DB session
+└── prompts/         # System prompt templates, one per agent
+tests/                # 11 offline unit tests — LLM and sandbox mocked
+evals/                # Golden 8-bug eval set + harness
+scripts/              # recommend_models, seed_target_repo, verify_caching, verify_resume
+repos/                # Local git mirrors, created at runtime (gitignored)
+```
 
-## Reference: the why behind the runbook
+## How It Works
 
-- **Langfuse trace** — each run is one trace named `swarm-run`, grouped by run id, one generation
-  per agent (`proposer`/`breaker`/`arbitrator`) tagged with the model, showing per-call tokens and
-  cost. That's your "I know the exact cost of every run" figure.
-- **Prompt caching minimums** — Anthropic silently skips caching if the cached prefix is below a
-  per-model floor: **1,024 tokens for Sonnet, 4,096 for Haiku**. Prompts are split into a stable
-  prefix (role + rules + repo context + issue, marked `cache_control`) and a variable suffix, and
-  the Haiku agents retrieve more chunks (`BREAKER/ARBITRATOR_CONTEXT_CHUNKS=12`) to clear 4,096.
-  The gateway logs a `caching DISABLED` warning per agent when a real prefix still falls short.
-  If `make verify-caching` shows `cache_read=0` on call 2: prefix under the minimum, model isn't
-  `anthropic/…`, or >5 min elapsed between calls (TTL). The toy demo repo is legitimately under
-  4,096 — that's why `verify_caching.py` uses a large synthetic prefix to test the mechanism.
-- **Restart-resume** — if the live restart fails but `make verify-resume` passes, the bug is in the
-  Telegram callback → `on_decision` wiring, not the Postgres checkpointer.
+A GitHub webhook lands, gets HMAC-verified, and is pushed onto a Redis Stream so the webhook can ack instantly — the actual work happens in a background worker. That worker refreshes a local git mirror, embeds changed code with pgvector, and hands off to a LangGraph state machine: Proposer writes a patch, Breaker runs the repo's tests against it in a network-off Docker container and critiques it, Arbitrator rules on the outcome (and can't approve a patch whose tests failed, by code, not by prompt). An approved run pauses at a LangGraph `interrupt()` checkpointed to Postgres and sends you a Telegram card; your tap resumes the exact same run from that checkpoint and opens the PR or posts the review.
 
-## Security notes
+## Roadmap / Known Limitations
 
-- Issue/PR text is public, attacker-realistic input: wrapped in `UNTRUSTED_*` delimiters,
-  instruction-like content flagged, and structurally backstopped by the no-network sandbox and
-  the human gate. An injected "add a backdoor" still can't merge anything — only you can.
-- The PAT is fine-grained and repo-scoped; the bot never force-pushes to default branches.
-- Webhooks are HMAC-verified and deduplicated by delivery id.
+- No CI configured — `make test` has to be run by hand
+- No index on the embeddings column, so retrieval is a brute-force scan; fine at demo scale, not at "watching 50 repos" scale
+- No retry/backoff on GitHub or Telegram API calls if they rate-limit or fail
+- `DAILY_SPEND_CAP_USD` is one global cap, not per-repo — a busy repo can eat the whole day's budget
+- The Telegram chat id is the only access control there is; there's no broader auth system
+
+## License
+
+<!-- TODO: no LICENSE file in this repo yet. MIT is the common default for a solo portfolio project — add a LICENSE file if you want one. -->
+
+## Contact
+
+<!-- TODO: add your name -->
+GitHub: [@Kaung31](https://github.com/Kaung31)
+<!-- TODO: add LinkedIn -->
